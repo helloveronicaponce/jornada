@@ -1,0 +1,513 @@
+import { useState, useMemo, useEffect } from "react";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Legend } from "recharts";
+import { Scale, Flame, Dumbbell, Trophy, Plus, X, Droplets, Pill, Save, Trash2 } from "lucide-react";
+
+const PESO_INICIAL = 91.5;
+const PESO_META = 65;
+const META_HIDRATACAO = 3150;
+const STORAGE_KEY = "jornada-emagrecimento";
+
+const DEFAULT_DATA = {
+  registros: [
+    { data: "21/02/2025", peso: 91.5, notas: "" },
+    { data: "23/02/2025", peso: 92.3, notas: "" },
+    { data: "24/02/2025", peso: 91.9, notas: "" },
+    { data: "25/02/2025", peso: 91.5, notas: "" },
+    { data: "26/02/2025", peso: 91.0, notas: "" },
+    { data: "27/02/2025", peso: 90.8, notas: "" },
+    { data: "28/02/2025", peso: 90.5, notas: "" },
+    { data: "01/03/2025", peso: 90.5, notas: "" },
+  ],
+  treinos: [
+    { data: "26/02/2025", tipo: "Pilates", duracao: "", notas: "" },
+    { data: "27/02/2025", tipo: "Pilates", duracao: "", notas: "" },
+    { data: "28/02/2025", tipo: "Natação", duracao: "", notas: "" },
+  ],
+  hidratacao: [
+    { data: "26/02/2025", ml: 3450 },
+    { data: "27/02/2025", ml: 4370 },
+    { data: "28/02/2025", ml: 3450 },
+  ],
+  medicacao: [
+    { data: "22/02/2025", dose: "2,5mg", medicamento: "Tirzepatida", notas: "1ª dose" },
+    { data: "01/03/2025", dose: "2,5mg", medicamento: "Tirzepatida", notas: "2ª dose" },
+  ],
+};
+
+const parseDate = str => { const [d,m,y] = str.split("/"); return new Date(`${y}-${m}-${d}`); };
+const formatDate = d => `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;
+
+// Botão de excluir com confirmação inline
+const DeleteBtn = ({ onConfirm }) => {
+  const [confirm, setConfirm] = useState(false);
+  if (confirm) return (
+    <div className="flex items-center gap-1">
+      <button onClick={() => setConfirm(false)} className="text-xs text-gray-400 px-2 py-1 rounded hover:bg-gray-100">Não</button>
+      <button onClick={onConfirm} className="text-xs text-white bg-red-500 px-2 py-1 rounded hover:bg-red-600">Confirmar</button>
+    </div>
+  );
+  return (
+    <button onClick={() => setConfirm(true)} className="p-1.5 text-gray-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-colors">
+      <Trash2 className="w-4 h-4" />
+    </button>
+  );
+};
+
+export default function App() {
+  const [loaded, setLoaded] = useState(false);
+  const [savedAt, setSavedAt] = useState(null);
+  const [registros, setRegistros] = useState([]);
+  const [treinos, setTreinos] = useState([]);
+  const [hidratacao, setHidratacao] = useState([]);
+  const [medicacao, setMedicacao] = useState([]);
+  const [showAddPeso, setShowAddPeso] = useState(false);
+  const [showAddTreino, setShowAddTreino] = useState(false);
+  const [showAddAgua, setShowAddAgua] = useState(false);
+  const [showAddMed, setShowAddMed] = useState(false);
+  const [novoPeso, setNovoPeso] = useState({ data: "", peso: "", notas: "" });
+  const [novoTreino, setNovoTreino] = useState({ data: "", tipo: "", duracao: "", notas: "" });
+  const [novaAgua, setNovaAgua] = useState({ data: "", ml: "" });
+  const [novaMed, setNovaMed] = useState({ data: "", dose: "2,5mg", medicamento: "Tirzepatida", notas: "" });
+  const [aba, setAba] = useState("visao");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await window.storage.get(STORAGE_KEY);
+        const data = res ? JSON.parse(res.value) : DEFAULT_DATA;
+        setRegistros(data.registros); setTreinos(data.treinos);
+        setHidratacao(data.hidratacao); setMedicacao(data.medicacao);
+        if (res) setSavedAt("Dados carregados ✓");
+      } catch {
+        setRegistros(DEFAULT_DATA.registros); setTreinos(DEFAULT_DATA.treinos);
+        setHidratacao(DEFAULT_DATA.hidratacao); setMedicacao(DEFAULT_DATA.medicacao);
+      }
+      setLoaded(true);
+    })();
+  }, []);
+
+  const salvar = async (r, t, h, m) => {
+    try {
+      await window.storage.set(STORAGE_KEY, JSON.stringify({ registros: r, treinos: t, hidratacao: h, medicacao: m }));
+      const now = new Date();
+      setSavedAt(`Salvo às ${now.getHours()}:${String(now.getMinutes()).padStart(2,"0")}`);
+    } catch { setSavedAt("Erro ao salvar"); }
+  };
+
+  const del = (setter, getter, idx) => {
+    const updated = getter.filter((_, i) => i !== idx);
+    setter(updated);
+    const r = setter === setRegistros ? updated : registros;
+    const t = setter === setTreinos ? updated : treinos;
+    const h = setter === setHidratacao ? updated : hidratacao;
+    const m = setter === setMedicacao ? updated : medicacao;
+    salvar(r, t, h, m);
+  };
+
+  const pesoAtual = registros[registros.length - 1]?.peso ?? PESO_INICIAL;
+  const perdido = +(PESO_INICIAL - pesoAtual).toFixed(1);
+  const progresso = Math.min(100, +((perdido / (PESO_INICIAL - PESO_META)) * 100).toFixed(1));
+
+  const { trendData, previsaoData, previsaoMeta } = useMemo(() => {
+    const pts = registros.map(r => ({ x: parseDate(r.data).getTime(), y: r.peso }));
+    const n = pts.length;
+    if (n < 2) return { trendData: [], previsaoData: [], previsaoMeta: null };
+    const sumX = pts.reduce((a,p)=>a+p.x,0), sumY = pts.reduce((a,p)=>a+p.y,0);
+    const sumXY = pts.reduce((a,p)=>a+p.x*p.y,0), sumX2 = pts.reduce((a,p)=>a+p.x*p.x,0);
+    const slope = (n*sumXY-sumX*sumY)/(n*sumX2-sumX*sumX);
+    const intercept = (sumY-slope*sumX)/n;
+    const predict = x => slope*x+intercept;
+    const xMeta = (PESO_META-intercept)/slope;
+    const dataMeta = new Date(xMeta);
+    const start = parseDate(registros[0].data).getTime();
+    const end = Math.min(xMeta, start+365*24*60*60*1000);
+    const steps = 30, step = (end-start)/steps;
+    const previsaoData = Array.from({length:steps+1},(_,i)=>{
+      const t = start+i*step;
+      return { data: formatDate(new Date(t)), tendencia: +predict(t).toFixed(1) };
+    });
+    const trendData = registros.map(r=>({ data:r.data.slice(0,5), peso:r.peso, tendencia:+predict(parseDate(r.data).getTime()).toFixed(1) }));
+    const previsaoStr = slope<0 ? `${String(dataMeta.getDate()).padStart(2,"0")}/${String(dataMeta.getMonth()+1).padStart(2,"0")}/${dataMeta.getFullYear()}` : null;
+    return { trendData, previsaoData, previsaoMeta: previsaoStr };
+  }, [registros]);
+
+  const diasMetaAtingida = hidratacao.filter(h=>h.ml>=META_HIDRATACAO).length;
+  const mediaHidratacao = hidratacao.length ? Math.round(hidratacao.reduce((a,h)=>a+h.ml,0)/hidratacao.length) : 0;
+  const ultimaAgua = hidratacao[hidratacao.length-1];
+  const pctHoje = ultimaAgua ? Math.min(100,Math.round((ultimaAgua.ml/META_HIDRATACAO)*100)) : 0;
+  const proximaDose = useMemo(() => {
+    if (!medicacao.length) return null;
+    const d = parseDate(medicacao[medicacao.length-1].data);
+    d.setDate(d.getDate()+7);
+    return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`;
+  }, [medicacao]);
+
+  const totalTreinos = treinos.length;
+  const tiposCount = treinos.reduce((acc,t)=>{acc[t.tipo]=(acc[t.tipo]||0)+1;return acc;},{});
+  const chartAguaData = useMemo(()=>hidratacao.map(h=>({data:h.data.slice(0,5),ml:h.ml})),[hidratacao]);
+
+  const addPeso = () => {
+    if (!novoPeso.data||!novoPeso.peso) return;
+    const updated = [...registros,{...novoPeso,peso:parseFloat(novoPeso.peso)}];
+    setRegistros(updated); salvar(updated,treinos,hidratacao,medicacao);
+    setNovoPeso({data:"",peso:"",notas:""}); setShowAddPeso(false);
+  };
+  const addTreino = () => {
+    if (!novoTreino.data||!novoTreino.tipo) return;
+    const updated = [...treinos,novoTreino];
+    setTreinos(updated); salvar(registros,updated,hidratacao,medicacao);
+    setNovoTreino({data:"",tipo:"",duracao:"",notas:""}); setShowAddTreino(false);
+  };
+  const addAgua = () => {
+    if (!novaAgua.data||!novaAgua.ml) return;
+    const updated = [...hidratacao,{data:novaAgua.data,ml:parseInt(novaAgua.ml)}];
+    setHidratacao(updated); salvar(registros,treinos,updated,medicacao);
+    setNovaAgua({data:"",ml:""}); setShowAddAgua(false);
+  };
+  const addMed = () => {
+    if (!novaMed.data) return;
+    const updated = [...medicacao,novaMed];
+    setMedicacao(updated); salvar(registros,treinos,hidratacao,updated);
+    setNovaMed({data:"",dose:"2,5mg",medicamento:"Tirzepatida",notas:""}); setShowAddMed(false);
+  };
+
+  // índice real (lista não invertida) a partir do índice invertido
+  const realIdx = (arr, invIdx) => arr.length - 1 - invIdx;
+
+  if (!loaded) return (
+    <div className="min-h-screen bg-gradient-to-br from-rose-50 to-pink-50 flex items-center justify-center">
+      <div className="text-center text-gray-400"><div className="text-4xl mb-3">⏳</div><p>Carregando seus dados...</p></div>
+    </div>
+  );
+
+  const FormCard = ({ color, onClose, children, onSave, label }) => (
+    <div className={`bg-${color}-50 rounded-xl p-4 mb-4 border border-${color}-100`}>
+      <div className="flex justify-between mb-3">
+        <span className="font-medium text-gray-700">{label}</span>
+        <button onClick={onClose}><X className="w-4 h-4 text-gray-400" /></button>
+      </div>
+      {children}
+      <button onClick={onSave} className={`w-full bg-${color}-500 text-white rounded-lg py-2 text-sm font-medium hover:bg-${color}-600`}>Salvar</button>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-rose-50 to-pink-50 p-4 md:p-8">
+      {/* Header */}
+      <div className="bg-white rounded-2xl shadow-sm border border-rose-100 p-6 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 bg-rose-100 rounded-full flex items-center justify-center">
+              <Trophy className="w-6 h-6 text-rose-500" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-800">Minha Jornada</h1>
+              <p className="text-gray-500 text-sm">De <strong>91,5 kg</strong> até <strong>65 kg</strong> — dieta + treino + tirzepatida 💪</p>
+            </div>
+          </div>
+          {savedAt && (
+            <div className="flex items-center gap-1 text-xs text-teal-600 bg-teal-50 px-3 py-1.5 rounded-full border border-teal-100">
+              <Save className="w-3 h-3" /> {savedAt}
+            </div>
+          )}
+        </div>
+        <div>
+          <div className="flex justify-between text-sm text-gray-600 mb-2">
+            <span>Progresso geral</span>
+            <span className="font-semibold text-rose-500">{progresso}%</span>
+          </div>
+          <div className="w-full bg-rose-100 rounded-full h-4 overflow-hidden">
+            <div className="h-4 rounded-full bg-gradient-to-r from-rose-400 to-pink-500 transition-all duration-700" style={{width:`${progresso}%`}} />
+          </div>
+          <div className="flex justify-between text-xs text-gray-400 mt-1"><span>91,5 kg</span><span>🏁 65 kg</span></div>
+        </div>
+        {previsaoMeta && (
+          <div className="mt-4 bg-rose-50 border border-rose-100 rounded-xl px-4 py-3 text-sm text-rose-700">
+            📈 Pela tendência atual, você atingirá <strong>65 kg</strong> em torno de <strong>{previsaoMeta}</strong>
+          </div>
+        )}
+      </div>
+
+      {/* Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        {[
+          {label:"Peso atual", value:`${pesoAtual} kg`, icon:<Scale className="w-5 h-5 text-rose-400"/>},
+          {label:"Já perdi", value:`${perdido} kg`, icon:<Flame className="w-5 h-5 text-orange-400"/>},
+          {label:"Treinos", value:totalTreinos, icon:<Dumbbell className="w-5 h-5 text-purple-400"/>},
+          {label:"Próxima dose", value:proximaDose??"—", icon:<Pill className="w-5 h-5 text-teal-400"/>},
+        ].map((c,i)=>(
+          <div key={i} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-col gap-2">
+            <div className="flex items-center justify-between"><span className="text-xs text-gray-500">{c.label}</span>{c.icon}</div>
+            <span className="text-xl font-bold text-gray-800">{c.value}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Abas */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        {["visao","peso","treinos","hidratacao","medicacao"].map(a=>(
+          <button key={a} onClick={()=>setAba(a)}
+            className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${aba===a?"bg-rose-500 text-white":"bg-white text-gray-500 border border-gray-200"}`}>
+            {{visao:"📊 Visão Geral",peso:"⚖️ Peso",treinos:"🏋️ Treinos",hidratacao:"💧 Hidratação",medicacao:"💊 Medicação"}[a]}
+          </button>
+        ))}
+      </div>
+
+      {/* Visão Geral */}
+      {aba==="visao" && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+            <h2 className="font-semibold text-gray-700 mb-1">Evolução do Peso + Tendência</h2>
+            <p className="text-xs text-gray-400 mb-4">Projeção baseada na tendência atual dos registros</p>
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart margin={{top:10,right:20,left:0,bottom:0}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#fce7f3"/>
+                <XAxis dataKey="data" type="category" allowDuplicatedCategory={false} tick={{fontSize:11}}/>
+                <YAxis domain={[60,95]} tick={{fontSize:11}}/><Tooltip/><Legend/>
+                <ReferenceLine y={PESO_META} stroke="#f43f5e" strokeDasharray="4 4" label={{value:"Meta 65kg",position:"insideTopRight",fontSize:10,fill:"#f43f5e"}}/>
+                <Line data={trendData} type="monotone" dataKey="peso" stroke="#f43f5e" strokeWidth={2.5} dot={{fill:"#f43f5e",r:4}} name="Peso real (kg)" connectNulls/>
+                <Line data={previsaoData} type="monotone" dataKey="tendencia" stroke="#fb923c" strokeWidth={1.5} strokeDasharray="5 3" dot={false} name="Tendência" connectNulls/>
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+            <h2 className="font-semibold text-gray-700 mb-4">Hidratação Diária</h2>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={chartAguaData} margin={{top:10,right:20,left:0,bottom:0}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#dbeafe"/>
+                <XAxis dataKey="data" tick={{fontSize:11}}/><YAxis tick={{fontSize:11}}/>
+                <Tooltip formatter={v=>[`${v} ml`]}/>
+                <ReferenceLine y={META_HIDRATACAO} stroke="#3b82f6" strokeDasharray="4 4" label={{value:"Meta",position:"right",fontSize:11,fill:"#3b82f6"}}/>
+                <Line type="monotone" dataKey="ml" stroke="#60a5fa" strokeWidth={2.5} dot={{fill:"#60a5fa",r:4}} name="Água (ml)"/>
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+            <h2 className="font-semibold text-gray-700 mb-3 flex items-center gap-2"><Pill className="w-4 h-4 text-teal-500"/> Tirzepatida</h2>
+            <div className="grid grid-cols-3 gap-3">
+              {[["Doses",medicacao.length],["Dose atual",medicacao[medicacao.length-1]?.dose],["Próxima dose",proximaDose]].map(([l,v])=>(
+                <div key={l} className="bg-teal-50 rounded-xl p-3 text-center">
+                  <p className="text-xs text-gray-500 mb-1">{l}</p><p className="font-bold text-teal-600">{v}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Peso */}
+      {aba==="peso" && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-gray-700">Registros de Peso</h2>
+            <button onClick={()=>setShowAddPeso(true)} className="flex items-center gap-1 bg-rose-500 text-white px-3 py-1.5 rounded-full text-sm font-medium hover:bg-rose-600">
+              <Plus className="w-4 h-4"/> Adicionar
+            </button>
+          </div>
+          {showAddPeso && (
+            <div className="bg-rose-50 rounded-xl p-4 mb-4 border border-rose-100">
+              <div className="flex justify-between mb-3">
+                <span className="font-medium text-gray-700">Novo registro</span>
+                <button onClick={()=>setShowAddPeso(false)}><X className="w-4 h-4 text-gray-400"/></button>
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div><label className="text-xs text-gray-500 block mb-1">Data</label>
+                  <input type="text" placeholder="DD/MM/AAAA" value={novoPeso.data} onChange={e=>setNovoPeso({...novoPeso,data:e.target.value})} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                <div><label className="text-xs text-gray-500 block mb-1">Peso (kg)</label>
+                  <input type="number" step="0.1" placeholder="ex: 89.2" value={novoPeso.peso} onChange={e=>setNovoPeso({...novoPeso,peso:e.target.value})} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+              </div>
+              <input type="text" placeholder="Notas (opcional)" value={novoPeso.notas} onChange={e=>setNovoPeso({...novoPeso,notas:e.target.value})} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-3"/>
+              <button onClick={addPeso} className="w-full bg-rose-500 text-white rounded-lg py-2 text-sm font-medium hover:bg-rose-600">Salvar</button>
+            </div>
+          )}
+          <div className="space-y-2">
+            {[...registros].reverse().map((r,i)=>(
+              <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                <div><span className="font-semibold text-gray-800">{r.peso} kg</span>
+                  {r.notas&&<p className="text-xs text-gray-400 mt-0.5">{r.notas}</p>}</div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-400">{r.data}</span>
+                  <DeleteBtn onConfirm={()=>del(setRegistros, registros, realIdx(registros,i))}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Treinos */}
+      {aba==="treinos" && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-gray-700">Treinos Realizados</h2>
+            <button onClick={()=>setShowAddTreino(true)} className="flex items-center gap-1 bg-rose-500 text-white px-3 py-1.5 rounded-full text-sm font-medium hover:bg-rose-600">
+              <Plus className="w-4 h-4"/> Adicionar
+            </button>
+          </div>
+          {Object.keys(tiposCount).length>0&&(
+            <div className="flex flex-wrap gap-2 mb-4">
+              {Object.entries(tiposCount).map(([tipo,n])=>(
+                <span key={tipo} className="bg-purple-100 text-purple-700 text-xs px-3 py-1 rounded-full font-medium">{tipo}: {n}x</span>
+              ))}
+            </div>
+          )}
+          {showAddTreino && (
+            <div className="bg-purple-50 rounded-xl p-4 mb-4 border border-purple-100">
+              <div className="flex justify-between mb-3">
+                <span className="font-medium text-gray-700">Novo treino</span>
+                <button onClick={()=>setShowAddTreino(false)}><X className="w-4 h-4 text-gray-400"/></button>
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div><label className="text-xs text-gray-500 block mb-1">Data</label>
+                  <input type="text" placeholder="DD/MM/AAAA" value={novoTreino.data} onChange={e=>setNovoTreino({...novoTreino,data:e.target.value})} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                <div><label className="text-xs text-gray-500 block mb-1">Tipo</label>
+                  <select value={novoTreino.tipo} onChange={e=>setNovoTreino({...novoTreino,tipo:e.target.value})} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                    <option value="">Selecione</option>
+                    {["Musculação","Cardio","Caminhada","Corrida","Natação","Pilates","Yoga","Outro"].map(t=><option key={t} value={t}>{t}</option>)}
+                  </select></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div><label className="text-xs text-gray-500 block mb-1">Duração (min)</label>
+                  <input type="number" placeholder="ex: 45" value={novoTreino.duracao} onChange={e=>setNovoTreino({...novoTreino,duracao:e.target.value})} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                <div><label className="text-xs text-gray-500 block mb-1">Notas</label>
+                  <input type="text" placeholder="opcional" value={novoTreino.notas} onChange={e=>setNovoTreino({...novoTreino,notas:e.target.value})} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+              </div>
+              <button onClick={addTreino} className="w-full bg-purple-500 text-white rounded-lg py-2 text-sm font-medium hover:bg-purple-600">Salvar</button>
+            </div>
+          )}
+          {treinos.length===0 ? (
+            <div className="text-center text-gray-400 py-12"><Dumbbell className="w-12 h-12 mx-auto mb-3 opacity-30"/><p>Nenhum treino ainda.</p></div>
+          ) : (
+            <div className="space-y-2">
+              {[...treinos].reverse().map((t,i)=>(
+                <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                  <div><span className="font-semibold text-gray-800">{t.tipo}</span>
+                    {t.duracao&&<span className="text-xs text-gray-500 ml-2">{t.duracao} min</span>}
+                    {t.notas&&<p className="text-xs text-gray-400 mt-0.5">{t.notas}</p>}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-400">{t.data}</span>
+                    <DeleteBtn onConfirm={()=>del(setTreinos, treinos, realIdx(treinos,i))}/>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Hidratação */}
+      {aba==="hidratacao" && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-gray-700">Hidratação Diária</h2>
+            <button onClick={()=>setShowAddAgua(true)} className="flex items-center gap-1 bg-blue-500 text-white px-3 py-1.5 rounded-full text-sm font-medium hover:bg-blue-600">
+              <Plus className="w-4 h-4"/> Adicionar
+            </button>
+          </div>
+          <div className="grid grid-cols-3 gap-3 mb-5">
+            {[["Meta diária",`${(META_HIDRATACAO/1000).toFixed(2)}L`],["Média",`${(mediaHidratacao/1000).toFixed(1)}L`],["Meta atingida",`${diasMetaAtingida}/${hidratacao.length} dias`]].map(([l,v])=>(
+              <div key={l} className="bg-blue-50 rounded-xl p-3 text-center">
+                <p className="text-xs text-gray-500 mb-1">{l}</p><p className="font-bold text-blue-600">{v}</p>
+              </div>
+            ))}
+          </div>
+          {ultimaAgua&&(
+            <div className="mb-5">
+              <div className="flex justify-between text-sm text-gray-600 mb-1">
+                <span>Último registro ({ultimaAgua.data.slice(0,5)})</span>
+                <span className="font-medium text-blue-500">{pctHoje}% da meta</span>
+              </div>
+              <div className="w-full bg-blue-100 rounded-full h-3 overflow-hidden">
+                <div className="h-3 rounded-full bg-gradient-to-r from-blue-400 to-cyan-400" style={{width:`${pctHoje}%`}}/>
+              </div>
+              <p className="text-xs text-gray-400 mt-1">{ultimaAgua.ml} ml de {META_HIDRATACAO} ml</p>
+            </div>
+          )}
+          {showAddAgua&&(
+            <div className="bg-blue-50 rounded-xl p-4 mb-4 border border-blue-100">
+              <div className="flex justify-between mb-3">
+                <span className="font-medium text-gray-700">Novo registro</span>
+                <button onClick={()=>setShowAddAgua(false)}><X className="w-4 h-4 text-gray-400"/></button>
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div><label className="text-xs text-gray-500 block mb-1">Data</label>
+                  <input type="text" placeholder="DD/MM/AAAA" value={novaAgua.data} onChange={e=>setNovaAgua({...novaAgua,data:e.target.value})} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                <div><label className="text-xs text-gray-500 block mb-1">Quantidade (ml)</label>
+                  <input type="number" placeholder="ex: 3150" value={novaAgua.ml} onChange={e=>setNovaAgua({...novaAgua,ml:e.target.value})} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+              </div>
+              <button onClick={addAgua} className="w-full bg-blue-500 text-white rounded-lg py-2 text-sm font-medium hover:bg-blue-600">Salvar</button>
+            </div>
+          )}
+          <div className="space-y-2">
+            {[...hidratacao].reverse().map((h,i)=>(
+              <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                <div className="flex items-center gap-3">
+                  <span className={`text-lg ${h.ml>=META_HIDRATACAO?"text-blue-500":"text-gray-300"}`}>💧</span>
+                  <div><span className="font-semibold text-gray-800">{(h.ml/1000).toFixed(2)} L</span>
+                    <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${h.ml>=META_HIDRATACAO?"bg-blue-100 text-blue-600":"bg-orange-100 text-orange-500"}`}>
+                      {h.ml>=META_HIDRATACAO?"✓ Meta":"Abaixo da meta"}</span></div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-400">{h.data.slice(0,5)}</span>
+                  <DeleteBtn onConfirm={()=>del(setHidratacao, hidratacao, realIdx(hidratacao,i))}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Medicação */}
+      {aba==="medicacao" && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-gray-700">Tirzepatida</h2>
+            <button onClick={()=>setShowAddMed(true)} className="flex items-center gap-1 bg-teal-500 text-white px-3 py-1.5 rounded-full text-sm font-medium hover:bg-teal-600">
+              <Plus className="w-4 h-4"/> Registrar dose
+            </button>
+          </div>
+          <div className="grid grid-cols-3 gap-3 mb-5">
+            {[["Total de doses",medicacao.length],["Dose atual",medicacao[medicacao.length-1]?.dose],["Próxima dose",proximaDose]].map(([l,v])=>(
+              <div key={l} className="bg-teal-50 rounded-xl p-3 text-center">
+                <p className="text-xs text-gray-500 mb-1">{l}</p><p className="font-bold text-teal-600">{v}</p>
+              </div>
+            ))}
+          </div>
+          {showAddMed&&(
+            <div className="bg-teal-50 rounded-xl p-4 mb-4 border border-teal-100">
+              <div className="flex justify-between mb-3">
+                <span className="font-medium text-gray-700">Nova dose</span>
+                <button onClick={()=>setShowAddMed(false)}><X className="w-4 h-4 text-gray-400"/></button>
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div><label className="text-xs text-gray-500 block mb-1">Data</label>
+                  <input type="text" placeholder="DD/MM/AAAA" value={novaMed.data} onChange={e=>setNovaMed({...novaMed,data:e.target.value})} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"/></div>
+                <div><label className="text-xs text-gray-500 block mb-1">Dose</label>
+                  <select value={novaMed.dose} onChange={e=>setNovaMed({...novaMed,dose:e.target.value})} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                    {["2,5mg","5mg","7,5mg","10mg","12,5mg","15mg"].map(d=><option key={d} value={d}>{d}</option>)}
+                  </select></div>
+              </div>
+              <input type="text" placeholder="Notas (ex: 3ª dose, sem efeitos colaterais)" value={novaMed.notas} onChange={e=>setNovaMed({...novaMed,notas:e.target.value})} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-3"/>
+              <button onClick={addMed} className="w-full bg-teal-500 text-white rounded-lg py-2 text-sm font-medium hover:bg-teal-600">Salvar</button>
+            </div>
+          )}
+          <div className="space-y-2">
+            {[...medicacao].reverse().map((m,i)=>(
+              <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                <div className="flex items-center gap-3">
+                  <span className="text-lg">💊</span>
+                  <div><span className="font-semibold text-gray-800">{m.medicamento} {m.dose}</span>
+                    {m.notas&&<p className="text-xs text-gray-400 mt-0.5">{m.notas}</p>}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-400">{m.data}</span>
+                  <DeleteBtn onConfirm={()=>del(setMedicacao, medicacao, realIdx(medicacao,i))}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
