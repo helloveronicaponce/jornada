@@ -110,6 +110,7 @@ const TABS = [
   { id: 'agua',     label: 'Hidratação',   icon: '💧' },
   { id: 'medic',    label: 'Medicação',    icon: '💊' },
   { id: 'suplem',   label: 'Suplementos',  icon: '🌿' },
+  { id: 'bio',      label: 'Corpo',         icon: '🔬' },
   { id: 'ia',       label: 'Análise IA',   icon: '🧠' }
 ];
 
@@ -282,20 +283,22 @@ function useJornadaData(userId) {
   const [suplementos, setSuplementos] = useState([]);
   const [marcadores,  setMarcadores]  = useState([]);
   const [analises,    setAnalises]    = useState([]);
+  const [bioimpedancia, setBioimpedancia] = useState([]);
   const [error, setError] = useState(null);
 
   const loadAll = useCallback(async () => {
     if (!userId) return;
     setLoading(true);
     try {
-      const [p,t,h,m,s,mc,a] = await Promise.all([
+      const [p,t,h,m,s,mc,a,bi] = await Promise.all([
         sb.from('jornada_pesos').select('*').order('data', { ascending: true }),
         sb.from('jornada_treinos').select('*').order('data', { ascending: true }),
         sb.from('jornada_hidratacao').select('*').order('data', { ascending: true }),
         sb.from('jornada_medicacao').select('*').order('data', { ascending: true }),
         sb.from('jornada_suplementos').select('*').order('data', { ascending: true }),
         sb.from('jornada_marcadores').select('*'),
-        sb.from('jornada_analises_ia').select('*').order('created_at', { ascending: false })
+        sb.from('jornada_analises_ia').select('*').order('created_at', { ascending: false }),
+        sb.from('jornada_bioimpedancia').select('*').order('data', { ascending: true })
       ]);
       if (p.error) throw p.error;
       setPesos(p.data || []);
@@ -305,6 +308,7 @@ function useJornadaData(userId) {
       setSuplementos(s.data || []);
       setMarcadores(mc.data || []);
       setAnalises(a.data || []);
+      setBioimpedancia(bi.data || []);
       setError(null);
     } catch (e) {
       console.error(e);
@@ -383,10 +387,12 @@ function useJornadaData(userId) {
     }
   }), []);
 
+  const bioApi = useMemo(() => crud('jornada_bioimpedancia', setBioimpedancia), [userId]);
+
   return {
     loading, error, reload: loadAll,
-    pesos, treinos, hidratacao, medicacao, suplementos, marcadores, analises,
-    pesosApi, treinosApi, hidratacaoApi, medicacaoApi, suplementosApi, marcadoresApi, analisesApi
+    pesos, treinos, hidratacao, medicacao, suplementos, marcadores, analises, bioimpedancia,
+    pesosApi, treinosApi, hidratacaoApi, medicacaoApi, suplementosApi, marcadoresApi, analisesApi, bioApi
   };
 }
 
@@ -1379,6 +1385,275 @@ function SuplementosTab({ data }) {
   );
 }
 
+/* ================== TAB: BIOIMPEDÂNCIA (CORPO) ================== */
+function BioTab({ data }) {
+  const { bioimpedancia, bioApi } = data;
+  const [form, setForm] = useState({
+    data: todayStr(), peso:'', imc:'', gordura_pct:'', gordura_kg:'',
+    massa_musc_esq_pct:'', massa_musc_esq_kg:'', massa_musc_total_pct:'', massa_musc_total_kg:'',
+    agua_pct:'', agua_kg:'', gordura_visceral:'', ossos_kg:'',
+    metabolismo:'', proteina_pct:'', obesidade_pct:'', idade_metabolica:'', lbm_kg:''
+  });
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  const ultimo = bioimpedancia.length ? bioimpedancia[bioimpedancia.length-1] : null;
+  const penultimo = bioimpedancia.length > 1 ? bioimpedancia[bioimpedancia.length-2] : null;
+
+  // Classificações
+  const classGordura = (v) => {
+    if (v < 25) return { label:'Saudável', color:'text-green-600', bg:'bg-green-100' };
+    if (v < 30) return { label:'Acima', color:'text-yellow-600', bg:'bg-yellow-100' };
+    if (v < 35) return { label:'Alto', color:'text-orange-600', bg:'bg-orange-100' };
+    return { label:'Muito alto', color:'text-red-600', bg:'bg-red-100' };
+  };
+  const classAgua = (v) => {
+    if (v >= 50) return { label:'Ótimo', color:'text-blue-600', bg:'bg-blue-100' };
+    if (v >= 45) return { label:'Adequado', color:'text-sky-600', bg:'bg-sky-100' };
+    return { label:'Baixo', color:'text-orange-600', bg:'bg-orange-100' };
+  };
+  const classVisceral = (v) => {
+    if (v <= 9) return { label:'Saudável', color:'text-green-600', bg:'bg-green-100' };
+    if (v <= 14) return { label:'Alto', color:'text-orange-600', bg:'bg-orange-100' };
+    return { label:'Muito alto', color:'text-red-600', bg:'bg-red-100' };
+  };
+  const classProteina = (v) => {
+    if (v >= 16) return { label:'Ótimo', color:'text-green-600', bg:'bg-green-100' };
+    if (v >= 12) return { label:'Adequado', color:'text-yellow-600', bg:'bg-yellow-100' };
+    return { label:'Baixo', color:'text-orange-600', bg:'bg-orange-100' };
+  };
+  const classMusculo = (v) => {
+    if (v >= 30) return { label:'Excelente', color:'text-green-600', bg:'bg-green-100' };
+    if (v >= 26) return { label:'Bom', color:'text-sky-600', bg:'bg-sky-100' };
+    return { label:'Baixo', color:'text-orange-600', bg:'bg-orange-100' };
+  };
+
+  const delta = (curr, prev, key, inv=false) => {
+    if (!curr || !prev) return null;
+    const d = parseFloat(curr[key]) - parseFloat(prev[key]);
+    if (isNaN(d) || d === 0) return null;
+    const positivo = inv ? d < 0 : d > 0;
+    return { val: d, positivo };
+  };
+
+  function MetricCard({ label, emoji, value, unit, cls, deltaInfo, info }) {
+    return (
+      <div className="bg-white/80 backdrop-blur rounded-xl p-3 border border-rose-100">
+        <div className="flex justify-between items-start">
+          <div className="text-xs text-gray-500">{emoji} {label}</div>
+          {deltaInfo && (
+            <span className={`text-xs font-semibold ${deltaInfo.positivo ? 'text-green-600' : 'text-red-500'}`}>
+              {deltaInfo.val > 0 ? '+' : ''}{deltaInfo.val.toFixed(1)}
+            </span>
+          )}
+        </div>
+        <div className="flex items-baseline gap-1 mt-1">
+          <span className={`text-2xl font-bold ${cls?.color || 'text-gray-800'}`}>{value}</span>
+          <span className="text-xs text-gray-500">{unit}</span>
+        </div>
+        {cls && <span className={`text-xs px-2 py-0.5 rounded-full ${cls.bg} ${cls.color} font-medium`}>{cls.label}</span>}
+        {info && <div className="text-xs text-gray-400 mt-1">{info}</div>}
+      </div>
+    );
+  }
+
+  async function salvar(e) {
+    e.preventDefault();
+    const row = {};
+    Object.entries(form).forEach(([k,v]) => {
+      if (v !== '' && v !== null) {
+        row[k] = k === 'data' ? v : k === 'idade_metabolica' ? parseInt(v) : parseFloat(String(v).replace(',','.'));
+      }
+    });
+    if (!row.peso) { alert('Peso é obrigatório'); return; }
+    if (editing) {
+      await bioApi.update(editing, row);
+      setEditing(null);
+    } else {
+      await bioApi.add(row);
+    }
+    setForm({ data: todayStr(), peso:'', imc:'', gordura_pct:'', gordura_kg:'', massa_musc_esq_pct:'', massa_musc_esq_kg:'', massa_musc_total_pct:'', massa_musc_total_kg:'', agua_pct:'', agua_kg:'', gordura_visceral:'', ossos_kg:'', metabolismo:'', proteina_pct:'', obesidade_pct:'', idade_metabolica:'', lbm_kg:'' });
+    setShowForm(false);
+  }
+
+  function startEdit(r) {
+    setEditing(r.id);
+    const f = { data: r.data };
+    ['peso','imc','gordura_pct','gordura_kg','massa_musc_esq_pct','massa_musc_esq_kg','massa_musc_total_pct','massa_musc_total_kg','agua_pct','agua_kg','gordura_visceral','ossos_kg','metabolismo','proteina_pct','obesidade_pct','idade_metabolica','lbm_kg'].forEach(k => { f[k] = r[k] != null ? String(r[k]) : ''; });
+    setForm(f);
+    setShowForm(true);
+  }
+
+  // Gráficos
+  const chartData = bioimpedancia.map(b => ({
+    label: formatBR(b.data).substring(0,5),
+    gordura: parseFloat(b.gordura_pct),
+    musculo: parseFloat(b.massa_musc_esq_pct),
+    agua: parseFloat(b.agua_pct)
+  }));
+
+  return (
+    <div className="space-y-3 pb-4">
+      {/* Último registro - cards principais */}
+      {ultimo ? (
+        <>
+          <div className="text-center mb-2">
+            <div className="text-xs text-gray-500">Última medição: {formatBR(ultimo.data)}</div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <MetricCard label="Gordura corporal" emoji="🔴" value={parseFloat(ultimo.gordura_pct).toFixed(1)} unit="%"
+              cls={classGordura(parseFloat(ultimo.gordura_pct))}
+              deltaInfo={delta(ultimo, penultimo, 'gordura_pct', true)}
+              info={`${parseFloat(ultimo.gordura_kg).toFixed(1)}kg de gordura`} />
+
+            <MetricCard label="Massa muscular" emoji="💪" value={parseFloat(ultimo.massa_musc_esq_pct).toFixed(1)} unit="%"
+              cls={classMusculo(parseFloat(ultimo.massa_musc_esq_pct))}
+              deltaInfo={delta(ultimo, penultimo, 'massa_musc_esq_pct')}
+              info={`${parseFloat(ultimo.massa_musc_esq_kg).toFixed(1)}kg esquelética`} />
+
+            <MetricCard label="Hidratação" emoji="💧" value={parseFloat(ultimo.agua_pct).toFixed(1)} unit="%"
+              cls={classAgua(parseFloat(ultimo.agua_pct))}
+              deltaInfo={delta(ultimo, penultimo, 'agua_pct')}
+              info={`${parseFloat(ultimo.agua_kg).toFixed(1)}kg de água`} />
+
+            <MetricCard label="Gord. visceral" emoji="🫁" value={parseFloat(ultimo.gordura_visceral).toFixed(1)} unit=""
+              cls={classVisceral(parseFloat(ultimo.gordura_visceral))}
+              deltaInfo={delta(ultimo, penultimo, 'gordura_visceral', true)}
+              info={parseFloat(ultimo.gordura_visceral) >= 9 ? 'No limite!' : 'Dentro do ideal'} />
+
+            <MetricCard label="Proteína" emoji="🥩" value={parseFloat(ultimo.proteina_pct).toFixed(1)} unit="%"
+              cls={classProteina(parseFloat(ultimo.proteina_pct))}
+              deltaInfo={delta(ultimo, penultimo, 'proteina_pct')}
+              info="Ideal: 16-20%" />
+
+            <MetricCard label="Metab. basal" emoji="🔥" value={parseFloat(ultimo.metabolismo).toFixed(0)} unit="kcal"
+              info="Gasto calórico em repouso" />
+
+            <MetricCard label="Idade metabólica" emoji="⏳" value={ultimo.idade_metabolica} unit="anos"
+              cls={ultimo.idade_metabolica > 33 ? { label: `+${ultimo.idade_metabolica - 33} anos`, color: 'text-orange-600', bg: 'bg-orange-100' } : { label: 'No alvo', color: 'text-green-600', bg: 'bg-green-100' }}
+              info="Idade real: 33" />
+
+            <MetricCard label="Massa óssea" emoji="🦴" value={parseFloat(ultimo.ossos_kg).toFixed(1)} unit="kg"
+              cls={{ label:'Excelente', color:'text-green-600', bg:'bg-green-100' }}
+              deltaInfo={delta(ultimo, penultimo, 'ossos_kg')} />
+          </div>
+
+          {/* Mini-análise */}
+          <Card className="bg-purple-50/80 border-purple-200">
+            <div className="text-sm font-medium text-purple-700 mb-2">📋 Análise da composição</div>
+            <div className="text-sm text-gray-700 space-y-2">
+              <p>
+                Seu corpo tem <b>{parseFloat(ultimo.gordura_kg).toFixed(1)}kg de gordura</b> e <b>{parseFloat(ultimo.massa_musc_esq_kg).toFixed(1)}kg de músculo esquelético</b>.
+                A massa magra total (LBM) é <b>{parseFloat(ultimo.lbm_kg).toFixed(1)}kg</b> — tudo que não é gordura.
+              </p>
+              <p>
+                {parseFloat(ultimo.gordura_pct) > 35 ?
+                  '⚠️ Gordura corporal acima do ideal. A meta é reduzir para 25-30% mantendo a massa muscular — e é exatamente isso que está acontecendo!' :
+                  '✅ Gordura corporal dentro da faixa aceitável.'}
+              </p>
+              <p>
+                {parseFloat(ultimo.agua_pct) < 45 ?
+                  '💧 Hidratação corporal baixa. Reforça a meta de água diária — isso impacta metabolismo, retenção e pele.' :
+                  '💧 Hidratação corporal adequada!'}
+              </p>
+              <p>
+                {parseFloat(ultimo.proteina_pct) < 12 ?
+                  '🥩 Proteína baixa. Considere aumentar proteína nas refeições (ovos, frango, peixe) além do Whey.' :
+                  '🥩 Nível de proteína adequado.'}
+              </p>
+              <p>
+                🔥 Seu metabolismo basal queima <b>{parseFloat(ultimo.metabolismo).toFixed(0)} kcal/dia</b> só existindo. Com treinos, o gasto total é maior.
+              </p>
+            </div>
+          </Card>
+
+          {/* Gráfico de evolução */}
+          {chartData.length > 1 && (
+            <Card>
+              <div className="text-sm font-medium text-gray-700 mb-2">📈 Evolução da composição</div>
+              <div style={{ width: '100%', height: 200 }}>
+                <R.ResponsiveContainer>
+                  <R.LineChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                    <R.CartesianGrid strokeDasharray="3 3" stroke="#fce7f3"/>
+                    <R.XAxis dataKey="label" tick={{ fontSize: 10 }}/>
+                    <R.YAxis tick={{ fontSize: 10 }}/>
+                    <R.Tooltip formatter={(v) => `${v}%`}/>
+                    <R.Legend wrapperStyle={{ fontSize: 11 }}/>
+                    <R.Line type="monotone" dataKey="gordura" stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} name="Gordura %"/>
+                    <R.Line type="monotone" dataKey="musculo" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} name="Músculo %"/>
+                    <R.Line type="monotone" dataKey="agua" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} name="Água %"/>
+                  </R.LineChart>
+                </R.ResponsiveContainer>
+              </div>
+            </Card>
+          )}
+        </>
+      ) : (
+        <div className="text-center text-gray-500 py-8">Nenhuma medição registrada ainda</div>
+      )}
+
+      {/* Botão add / form */}
+      <button onClick={() => setShowForm(!showForm)}
+        className="w-full bg-gradient-to-r from-purple-500 to-rose-500 text-white py-3 rounded-2xl font-semibold shadow active:scale-95">
+        {showForm ? 'Fechar formulário' : '+ Nova medição'}
+      </button>
+
+      {showForm && (
+        <Card>
+          <form onSubmit={salvar} className="space-y-3">
+            <DateInput value={form.data} onChange={v => setForm({...form, data: v})} className="w-full"/>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                ['peso','Peso (kg)'],['imc','IMC'],['gordura_pct','Gordura (%)'],['gordura_kg','Gordura (kg)'],
+                ['massa_musc_esq_pct','Musc.Esq. (%)'],['massa_musc_esq_kg','Musc.Esq. (kg)'],
+                ['massa_musc_total_pct','Musc.Total (%)'],['massa_musc_total_kg','Musc.Total (kg)'],
+                ['agua_pct','Água (%)'],['agua_kg','Água (kg)'],
+                ['gordura_visceral','G.Visceral'],['ossos_kg','Ossos (kg)'],
+                ['metabolismo','Metabolismo'],['proteina_pct','Proteína (%)'],
+                ['obesidade_pct','Obesidade (%)'],['idade_metabolica','Id.Metabólica'],
+                ['lbm_kg','LBM (kg)']
+              ].map(([k,l]) => (
+                <div key={k}>
+                  <label className="text-xs text-gray-500">{l}</label>
+                  <NumberInput value={form[k]} onChange={v => setForm({...form, [k]: v})} placeholder={l} className="w-full" step="0.1"/>
+                </div>
+              ))}
+            </div>
+            <button type="submit" className="w-full bg-rose-500 text-white py-2 rounded-xl font-semibold active:scale-95">
+              {editing ? 'Salvar alterações' : '+ Registrar medição'}
+            </button>
+            {editing && <button type="button" onClick={()=>{ setEditing(null); setShowForm(false); }} className="text-xs text-gray-500 w-full text-center">cancelar</button>}
+          </form>
+        </Card>
+      )}
+
+      {/* Histórico */}
+      {bioimpedancia.length > 0 && (
+        <Card>
+          <div className="text-sm font-medium text-gray-700 mb-2">Histórico</div>
+          <div className="space-y-2">
+            {[...bioimpedancia].reverse().map(b => (
+              <div key={b.id} className="flex items-center justify-between bg-purple-50/50 rounded-lg px-3 py-2">
+                <div className="text-sm">
+                  <div className="font-semibold text-purple-700">{formatBR(b.data)}</div>
+                  <div className="text-xs text-gray-500">
+                    {parseFloat(b.peso).toFixed(1)}kg · G{parseFloat(b.gordura_pct).toFixed(1)}% · M{parseFloat(b.massa_musc_esq_pct).toFixed(1)}% · 💧{parseFloat(b.agua_pct).toFixed(1)}%
+                  </div>
+                </div>
+                <div className="flex gap-1">
+                  <button onClick={() => startEdit(b)} className="p-1 text-gray-500 hover:text-rose-500"><IEdit className="w-4 h-4"/></button>
+                  <button onClick={() => { if (confirm('Excluir?')) bioApi.remove(b.id); }} className="p-1 text-gray-500 hover:text-red-500"><ITrash className="w-4 h-4"/></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 /* ================== TAB: ANÁLISE IA ================== */
 function AnaliseIATab({ data }) {
   const { pesos, treinos, hidratacao, medicacao, suplementos, analises, analisesApi } = data;
@@ -1648,6 +1923,7 @@ function App() {
     agua:    () => <HidratacaoTab data={data}/>,
     medic:   () => <MedicacaoTab data={data}/>,
     suplem:  () => <SuplementosTab data={data}/>,
+    bio:     () => <BioTab data={data}/>,
     ia:      () => <AnaliseIATab data={data}/>
   }[tab];
 
