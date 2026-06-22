@@ -35,7 +35,7 @@
 <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
 
 <!-- Supabase JS -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
 
 <!-- Babel Standalone (JSX in-browser) -->
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -197,7 +197,7 @@ function useAuth() {
     sb.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setLoading(false);
-    });
+    }).catch(() => setLoading(false));
     const { data: { subscription } } = sb.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       setLoading(false);
