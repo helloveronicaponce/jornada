@@ -1,5 +1,5 @@
 // Service Worker — Minha Jornada PWA
-const CACHE_NAME = 'jornada-v3';
+const CACHE_NAME = 'jornada-v4';
 
 // Só arquivos locais no pre-cache (CDNs são cacheadas sob demanda)
 const PRECACHE_URLS = [
