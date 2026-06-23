@@ -1565,21 +1565,11 @@ function BioTab({ data }) {
         <Card>
           <form onSubmit={salvar} className="space-y-3">
             <DateInput value={form.data} onChange={v => setForm({...form, data: v})} className="w-full"/>
-            <div className="grid grid-cols-2 gap-2">
-              {[
-                ['peso','Peso (kg)'],['imc','IMC'],['gordura_pct','Gordura (%)'],['gordura_kg','Gordura (kg)'],
-                ['massa_musc_esq_pct','Musc.Esq. (%)'],['massa_musc_esq_kg','Musc.Esq. (kg)'],
-                ['massa_musc_total_pct','Musc.Total (%)'],['massa_musc_total_kg','Musc.Total (kg)'],
-                ['agua_pct','Água (%)'],['agua_kg','Água (kg)'],
-                ['gordura_visceral','G.Visceral'],['ossos_kg','Ossos (kg)'],
-                ['metabolismo','Metabolismo'],['proteina_pct','Proteína (%)'],
-                ['obesidade_pct','Obesidade (%)'],['idade_metabolica','Id.Metabólica'],
-                ['lbm_kg','LBM (kg)'],
-                ['cintura_cm','Cintura (cm)'],['peito_cm','Peito (cm)'],['quadril_cm','Quadril (cm)']
-              ].map(([k,l]) => (
+            <div className="grid grid-cols-3 gap-2">
+              {[['cintura_cm','📏 Cintura'],['peito_cm','💗 Peito'],['quadril_cm','🍑 Quadril']].map(([k,l]) => (
                 <div key={k}>
                   <label className="text-xs text-gray-500">{l}</label>
-                  <NumberInput value={form[k]} onChange={v => setForm({...form, [k]: v})} placeholder={l} className="w-full" step="0.1"/>
+                  <NumberInput value={form[k]} onChange={v => setForm({...form, [k]: v})} placeholder="cm" className="w-full" step="1"/>
                 </div>
               ))}
             </div>
